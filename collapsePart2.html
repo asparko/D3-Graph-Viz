@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+
+<style>
+
+.uncollapsed {
+  stroke: #fff;
+  stroke-width: 1.5px;
+}
+
+.collapsed {
+  stroke: white;  
+}
+
+.link {
+  stroke: #999;
+  stroke-opacity: .6;
+}
+
+.linkCollapsed {
+  stroke: red;
+  stroke-opacity: .6;
+}
+
+.brush .extent {
+  fill-opacity: .1;
+  stroke: #fff;
+  shape-rendering: crispEdges;
+}
+</style>
+
+<body>
+
+<div id="collapse1">
+    <input name="collapse1Button" 
+           type="button" 
+           value="Collapse1"  />
+</div>
+
+<div id="collapse2">
+    <input name="collapse2Button" 
+           type="button" 
+           value="Collapse2" />
+</div>
+
+<div id="expand">
+    <input name="expandButton" 
+           type="button" 
+           value="Expand" />
+</div>
+
+<script src="http://d3js.org/d3.v3.min.js"></script>
+<script>
+
+//BUTTONS TOGGLE ENTIRE GROUPS BETWEEN CIRCLES AND PIES
+
+var width = 960,
+    height = 500,
+    graph,
+    pieData = [],
+    links1 = [],
+    links1b =[],
+    links2 = [],
+    links2b = [],
+    groupCnt,
+    group1 =[],
+    group2 =[];
+
+var svg = d3.select("body").append("svg")
+    .attr("width", width)
+    .attr("height", height);
+
+var arc = d3.svg.arc()
+    .innerRadius(1)
+    .outerRadius(10);
+
+var pie = d3.layout.pie()
+    .padAngle(.02);
+
+var collapseOn = [false,false];
+
+var force = d3.layout.force() 
+    .on("tick",tick)
+    .charge(-200)
+    .linkDistance(100)
+    .size([width, height]);
+
+var node,
+    link,
+    interLinks = [],
+    circles,
+    pies,
+    pies2;
+
+var color = d3.scale.category20();
+
+d3.json("graphData.json", function(error, json) {
+    graph = json; //need to give it a global variable name so can use it in update()
+    graph.links.forEach(function(d) { d.collapsed=0; }); //initialize all links to collapsed=0
+    update();
+});
+
+function update(){
+
+    countGroups(graph.nodes); //now we have nodes if diff groups in diff arrays, plus we know how big each group is with groupCnt[]
+        
+    var circleData = graph.nodes.filter(function(d) {return d.collapsed==0; });
+    //var linkCollapsedData = graph.links.filter(function(d) {return d.collapsed==1; });
+    var linkRegData = graph.links.filter(function(d) {return d.collapsed==0; });
+    var allLinks = linkRegData.concat(interLinks);
+    var allNodes = circleData.concat(pieData); //pieData filled/emptied with buttons
+
+    //Define functionality of buttons
+    d3.select("#collapse1")
+        .on("click", function() {
+            group1 = graph.nodes.filter(function(d) {return d.group==0; });
+            if (group1.every(function(d){ return d.collapsed==0; })){
+                var loc=findCenter(group1); //center of all nodes to be collapsed
+                group1.forEach(function(d){
+                    d.collapsed = 1;
+                });
+                var newPie = {
+                    'name': 1,
+                    'group': 2,
+                    'collapsed': 2,
+                    'x': loc[0],
+                    'y': loc[1]
+                };
+                pieData.push(newPie);
+//ISSUE: when making deep copy, links are no longer connected to original nodes, but deep copies of those nodes. no bueno. need to somehow fix this without losing orig link data
+                //Collapse links within group
+                links1 = graph.links.filter(function(d){
+                    return d.source.group==0 && d.target.group==0; //find all links within collapsed group
+                });
+                links1.forEach(function(d){
+                    d.collapsed = 1;
+                });
+
+                //Find inter-group links
+                links1b = graph.links.filter(function(d){
+                    return d.source.group != d.target.group; //find all links between groups
+                });
+                
+                if (interLinks.length==0){ //only make deepCopy if we haven't already (when just 2 groups)
+                    interLinks = deepCopy(links1b);
+                };
+
+                links1b.forEach(function(d){
+                    d.collapsed=1;
+                });
+
+                for (i=0; i<interLinks.length; i++){
+                    interLinks[i].collapsed=2;
+                    if (interLinks[i].source.group==1)
+                        interLinks[i].source = links1b[i].source;
+                    if (interLinks[i].source.group==0)
+                        interLinks[i].source = newPie;
+                    if (interLinks[i].target.group==1)
+                        interLinks[i].target = links1b[i].target;
+                    if (interLinks[i].target.group==0)
+                        interLinks[i].target = newPie;
+                };
+                update();
+            };
+        });
+
+    d3.select("#collapse2")
+        .on("click", function() {
+            group2 = graph.nodes.filter(function(d) {return d.group==1; });
+            if (group2.every(function(d){ return d.collapsed==0; })){
+                var loc=findCenter(group2); //center of all nodes to be collapsed
+                group2.forEach(function(d){
+                    d.collapsed = 1;
+                });
+                var newPie = {
+                    'name': 2,
+                    'group': 2,
+                    'collapsed': 2,
+                    'x': loc[0],
+                    'y': loc[1]
+                };
+                pieData.push(newPie);
+
+                links2 = graph.links.filter(function(d){
+                    return d.source.group==1 && d.target.group==1; //find all links within collapsed group
+                });
+                links2.forEach(function(d){
+                    d.collapsed = 1;
+                });
+
+                //Find inter-group links
+                links2b = graph.links.filter(function(d){
+                    return d.source.group != d.target.group; //find all links between groups
+                });
+                
+                if (interLinks.length==0){ //only make deepCopy if we haven't already (when just 2 groups)
+                    interLinks = deepCopy(links2b);
+                };
+                //SOME OF THIS IS UNNECESSARY for TWO GROUPS...the intergroup links might have already been found and set to collapsed. although, if then uncollapsed, would be set back to 0. hmmm.
+
+                links2b.forEach(function(d){
+                    d.collapsed=1;
+                });
+
+                for (i=0; i<interLinks.length; i++){
+                    interLinks[i].collapsed=2;
+                    if (interLinks[i].source.group==0)
+                        interLinks[i].source = links1b[i].source;
+                    if (interLinks[i].source.group==1)
+                        interLinks[i].source = newPie;
+                    if (interLinks[i].target.group==0)
+                        interLinks[i].target = links1b[i].target;
+                    if (interLinks[i].target.group==1)
+                        interLinks[i].target = newPie;
+                };
+                update();
+            };
+        });
+
+    d3.select("#expand")
+        .on("click", function() {
+            group1.forEach(function(d){
+                d.collapsed = 0;
+            });
+            group2.forEach(function(d){
+                d.collapsed = 0;
+            });
+            links1.forEach(function(d){
+                d.collapsed = 0;
+            });
+            links2.forEach(function(d){
+                d.collapsed = 0;
+            });
+            links1b.forEach(function(d){
+                d.collapsed = 0;
+            });
+            links2b.forEach(function(d){
+                d.collapsed = 0;
+            });
+            interLinks=[];
+            pieData=[]; //empty pieData (could also remove by name)
+            update();
+        });
+
+    //Start FDL    
+    force
+        .nodes(allNodes) 
+        .links(allLinks)
+        .start();
+
+
+    //UPDATE LINKS *****************************************************
+    link = svg.selectAll(".link")
+        .data(allLinks)
+        .style("stroke-width", function(d) { return Math.sqrt(d.value); });
+
+    //enter new links
+    link.enter().insert("svg:line",".uncollapsed") //insert before any ".uncollapsed" elements
+        .attr("class","link")
+        .attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+    
+    link.exit().remove(); //exit old links        
+
+    //UPDATE CIRCLE AND PIE NODES ***********************************************
+    circles = svg.selectAll(".uncollapsed")
+        .data(circleData, function(d) {return d.name; });
+
+    //enter new nodes
+    circles.enter().insert("g")
+        .attr("class","node")
+        .attr("class","uncollapsed")
+        .attr("index", function(d) { return d.group; }) //keeps track of group of each node
+        .append("circle")
+            .attr("r",5)
+            .style("fill", function(d) { return color(d.group); })
+            .on("click",click)       
+        .call(force.drag);
+
+    //exit old nodes    
+    circles.exit().remove(); 
+
+
+    pies = svg.selectAll(".collapsed")
+        .data(pieData,function(d) {return d.name; }); //since only two unique names, ensures there are only two pies at a given time
+
+    pies2 = pies.enter().insert("g")
+        .attr("class","node")
+        .attr("class", "collapsed")
+        .on("click",click)
+        .call(force.drag)
+        .selectAll("path")
+            .data(pie(groupCnt));
+
+    pies2.enter().append("path")
+            .attr("d",arc)
+            .attr("index", function(d,i) { return i; })
+            .style("fill", function(d, i) { return color(i); });
+
+    //exit old pies
+    pies.exit().remove(); 
+
+};
+
+function deepCopy(obj) {
+    if (Object.prototype.toString.call(obj) === '[object Array]') {
+        //console.log("in loop");
+        var out = [], i = 0, len = obj.length;
+        for ( ; i < len; i++ ) {
+            out[i] = arguments.callee(obj[i]);
+        }
+        return out;
+    }
+    if (typeof obj === 'object') {
+        //console.log("in other loop");
+        var out = {}, i;
+        for ( i in obj ) {
+            out[i] = arguments.callee(obj[i]);
+        }
+        return out;
+    }
+    return obj;
+}
+
+function click(d){
+    //toggles data's collapsed value between 0 and 1 when node is clicked
+    if (d.collapsed==1) {
+        d.collapsed = 0;
+    } else {
+        d.collapsed = 1;
+    }
+    update();
+};
+
+function findCenter(data){
+    var avgX=0, avgY=0, size;
+    size = data.length;
+    data.forEach(function(d){
+        avgX += d.x;
+        avgY += d.y;
+        });
+    avgX = avgX/size;
+    avgY = avgY/size;
+    return [avgX, avgY];
+};
+
+function countGroups(objectArr){
+    //group1 = [];
+    //group2 = [];
+    groupCnt = [0,0];
+    for (var i = 0; i < objectArr.length; i++) {
+        if (objectArr[i].group==0) { 
+            groupCnt[0]++;
+            //group1.push(objectArr[i]);
+        };
+        if (objectArr[i].group==1){ 
+            groupCnt[1]++;
+            //group2.push(objectArr[i]);
+        };
+    };
+};
+
+
+function tick() {
+  link.attr("x1", function(d) { return d.source.x; })
+      .attr("y1", function(d) { return d.source.y; })
+      .attr("x2", function(d) { return d.target.x; })
+      .attr("y2", function(d) { return d.target.y; });
+
+  circles.attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+  pies.attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+};
+
+</script>

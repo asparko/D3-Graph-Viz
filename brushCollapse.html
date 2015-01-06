@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+.circles {
+  stroke: #fff;
+  stroke-width: 1.5px;
+}
+
+.circles .selected {
+  stroke: black;
+}
+
+.collapsed {
+  stroke: white;  
+}
+
+.hidden{
+
+}
+
+.link {
+  stroke: #999;
+  stroke-opacity: .6;
+}
+
+.brush .extent {
+  fill-opacity: .1;
+  stroke: #fff;
+  shape-rendering: crispEdges;
+}
+
+</style>
+
+<body>
+
+<div id="collapse">
+    <input name="collapseButton" 
+           type="button" 
+           value="Collapse Selection"  />
+</div>
+
+<script src="http://d3js.org/d3.v3.min.js"></script>
+
+<script>
+
+var width = 960,
+    height = 500,
+    shiftKey,
+    graph;
+
+//built in D3 color palatte
+var color = d3.scale.category20();
+
+var force = d3.layout.force()
+    .on("tick",tick)
+    .charge(-200)
+    .linkDistance(100)
+    .size([width, height]);
+
+var arc = d3.svg.arc();
+
+var pie = d3.layout.pie().padAngle(.02);
+
+var svg = d3.select("body")
+      .on("keydown.brush", keydown)
+      .on("keyup.brush", keyup)
+      .each(function() { this.focus(); })
+    .append("svg")
+      .attr("width", width)
+      .attr("height", height);
+
+var link,
+    circles,
+    pies,
+    pies2,
+    numberPies=0,
+    interLinks = [],
+    toCollapse = [];
+
+var pieData = [],
+    links1 = [],
+    links1b =[],
+    links2 = [],
+    links2b = [];
+
+
+var brush = svg.append("g")
+    .datum(function() { return {selected: false, previouslySelected: false}; })
+    .attr("class", "brush");
+
+d3.json("graphData.json", function(error, json) {
+    graph = json; //need to give it a global variable name so can use it in update()
+    graph.nodes.forEach(function(d) { d.collapsed=0; }); //initialize all nodes to collapsed=0
+    graph.nodes.forEach(function(d) { d.selected=0; }); //initialize all nodes to selected=0
+    graph.nodes.forEach(function(d) { d.previouslySelected=0; });
+    graph.links.forEach(function(d) { d.collapsed=0; }); //initialize all links to collapsed=0
+    graph.links.forEach(function(d) { d.selected=0; }); //initialize all links to selected=0
+    
+    update();
+});
+
+
+function update(){
+    var circleData = graph.nodes.filter(function(d) {return d.collapsed==0; });
+    var hiddenData = graph.nodes.filter(function(d) {return d.collapsed==1; });
+    var linkRegData = graph.links.filter(function(d) {return d.collapsed==0; });
+    var allLinks = linkRegData.concat(interLinks);
+    var allNodes = circleData.concat(pieData); //pieData filled/emptied with brush selection
+
+    //Define functionality of button
+    d3.select("#collapse")
+        .on("click", function() {
+            //toCollapse = graph.nodes.filter(function(d) {return d.selected==1; });
+            toCollapse = circleData.filter(function(d) {return d.selected==1; });
+            var loc = findCenter(toCollapse);
+            toCollapse.forEach(function(d){
+              d.collapsed=1;
+            });
+            var grp0 = toCollapse.filter(function(d) {return d.group==0; });
+            var grp1 = toCollapse.filter(function(d) {return d.group==1; });
+
+            var newPie = {
+                    'size': toCollapse.length, //num of nodes in collapsed group
+                    'name': 0,
+                    'group': 2,
+                    'collapsed': 2,
+                    'colors': [grp0.length, grp1.length],
+                    'x': loc[0],
+                    'y': loc[1]
+                };
+            pieData.push(newPie);
+            numberPies++;
+
+            //Collapse links within group
+            links1 = graph.links.filter(function(d){
+                return d.source.selected==1 && d.target.selected==1; //find all links within selected group
+            });
+            links1.forEach(function(d){
+                d.collapsed = 1;
+            });
+
+            //Find inter-group links
+            links1b = graph.links.filter(function(d){
+                return d.source.selected !== d.target.selected; //find all links between groups
+            });
+
+            interLinks = deepCopy(links1b);
+            
+            links1b.forEach(function(d){
+                d.collapsed=1;
+            });
+
+            //undo deep copy for regular nodes; replace others with new pie nodes
+            for (i=0; i<interLinks.length; i++){
+                interLinks[i].collapsed=2;
+                if (interLinks[i].source.selected==0)
+                    interLinks[i].source = links1b[i].source;
+                if (interLinks[i].source.selected==1)
+                    interLinks[i].source = newPie;
+                if (interLinks[i].target.selected==0)
+                    interLinks[i].target = links1b[i].target;
+                if (interLinks[i].target.selected==1)
+                    interLinks[i].target = newPie;
+            };
+            
+            toCollapse.forEach(function(d){
+              d.selected=0;
+              d.previouslySelected=0;
+              //d.fixed=1;
+            });
+
+            svg.selectAll(".circles")
+                .classed("selected", false);
+            update();
+            //if (group1.every(function(d){ return d.collapsed==0; })){
+                
+        });
+
+    force
+        .nodes(allNodes)
+        .links(allLinks)
+        .start();
+
+    
+
+    //UPDATE LINKS *****************************************************
+    link = svg.selectAll(".link")
+        .data(allLinks)
+        .style("stroke-width", function(d) { return Math.sqrt(d.value); });
+
+    //enter new links
+    link.enter().insert("line",".uncollapsed") //insert before any ".uncollapsed" elements
+        .attr("class","link")
+        .attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+    
+    link.exit().remove(); //exit old links      
+
+
+
+    //UPDATE CIRCLES *****************************************************
+    svg.selectAll(".circles").remove(); //delete old circles...not sure a clever way around this
+
+    circles = svg.insert("g")
+        .attr("class","circles")
+        .selectAll(".circles")
+        .data(circleData, function(d) {return d.name; });
+
+    circles.enter().insert("circle") 
+        .on("mousedown", function(d) {
+          d3.select(this).classed("selected", d.selected = 1);
+          if (!d.selected) { // Don't deselect on shift-drag.
+            if (!shiftKey) circles.classed("selected", function(p) { return p.selected = d === p; });
+            else d3.select(this).classed("selected", d.selected = 1);
+          }})
+        .on("mouseup", function(d) {
+          if (d.selected && shiftKey) d3.select(this).classed("selected", d.selected = 0);
+          })
+        //.attr("index", function(d) { return d.group; }) //keeps track of group of each node
+        //.append("circle")
+            .attr("r", 5)
+            .style("fill", function(d) { return color(d.group); }) //color nodes based on group
+        .call(force.drag);
+
+    //exit old nodes    
+    circles.exit().remove(); 
+
+    console.log(circles);
+
+    brush.call(d3.svg.brush()
+          .x(d3.scale.identity().domain([0, width]))
+          .y(d3.scale.identity().domain([0, height]))
+          .on("brushstart", function(d) {
+            circles.each(function(d) { d.previouslySelected = shiftKey && d.selected; });
+          })
+          .on("brush", function() {
+            var extent = d3.event.target.extent();
+            circles.classed("selected", function(d) {
+            return d.selected = d.previouslySelected ^
+                (extent[0][0] <= d.x && d.x < extent[1][0]
+                && extent[0][1] <= d.y && d.y < extent[1][1]);
+            });
+            //circles.classed("circles",false);
+          })
+          .on("brushend", function() {
+            d3.event.target.clear();
+            d3.select(this).call(d3.event.target);
+          }));
+
+    //UPDATE PIES *****************************************************
+    pies = svg.selectAll(".collapsed")
+        .data(pieData); 
+
+    pies2 = pies.enter().insert("g")
+        .attr("class", "collapsed")
+        .attr("index", function(d,i) { return i; })
+        //.on("click",click) //MAKE EXPAND FUNCTION FOR WHEN PIES ARE CLICKED
+        .call(force.drag)
+        .selectAll("path")
+            .data(function(){ //colors pie based on number of nodes in each group
+                if (numberPies > 0) 
+                    return pie(pieData[numberPies-1].colors);
+                else
+                    return pie([10]);
+            });
+
+    pies2.enter().append("path")
+            .attr("d",
+                arc.innerRadius(function(){                     
+                    return getRadius(this)/2;
+                }),
+                arc.outerRadius(function(){                     
+                    return getRadius(this)*2;
+                }))
+            .style("fill", function(d, i) { return color(i); });
+
+
+    //exit old pies
+    pies.exit().remove(); 
+
+};
+
+function getParGrp(data){
+    var parentGrp = d3.select(data.parentNode).datum().name;
+    return parentGrp;
+}
+
+function getRadius(data){  
+    var radius = d3.select(data.parentNode).datum().size;
+    return radius;
+}
+
+function deepCopy(obj) {
+    if (Object.prototype.toString.call(obj) === '[object Array]') {
+        var out = [], i = 0, len = obj.length;
+        for ( ; i < len; i++ ) {
+            out[i] = arguments.callee(obj[i]);
+        }
+        return out;
+    }
+    if (typeof obj === 'object') {
+        var out = {}, i;
+        for ( i in obj ) {
+            out[i] = arguments.callee(obj[i]);
+        }
+        return out;
+    }
+    return obj;
+}
+
+function findCenter(data){
+    var avgX=0, avgY=0, size;
+    size = data.length;
+    data.forEach(function(d){
+        avgX += d.x;
+        avgY += d.y;
+        });
+    avgX = avgX/size;
+    avgY = avgY/size;
+    return [avgX, avgY];
+}
+
+function keydown() {
+    /*if (!d3.event.metaKey) switch (d3.event.keyCode) {
+      case 38: nudge( 0, -1); break; // UP
+      case 40: nudge( 0, +1); break; // DOWN
+      case 37: nudge(-1,  0); break; // LEFT
+      case 39: nudge(+1,  0); break; // RIGHT
+    }*/
+    shiftKey = d3.event.shiftKey || d3.event.metaKey;
+}
+
+function keyup() {
+    shiftKey = d3.event.shiftKey || d3.event.metaKey;
+}
+
+function tick() {
+    link.attr("x1", function(d) { return d.source.x; })
+        .attr("y1", function(d) { return d.source.y; })
+        .attr("x2", function(d) { return d.target.x; })
+        .attr("y2", function(d) { return d.target.y; });
+
+    circles.attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+    pies.attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+};
+
+</script>
